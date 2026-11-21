@@ -37,6 +37,62 @@ La cadena de ataque **pod → ServiceAccount → token → RBAC → Secret → b
 
 Y luego la **misma arquitectura endurecida**, donde el ataque **se corta en cada paso**.
 
+### Diagrama — cadena de ataque (versión VULNERABLE)
+
+```mermaid
+flowchart TD
+    ATK([Atacante<br/>su laptop])
+    subgraph AWS["AWS · EKS (cuenta propia, aislada)"]
+      ALB["ALB internet-facing<br/>(inbound: solo tu IP)"]
+      subgraph NS["namespace team-z"]
+        POD["web-app pod<br/>root · token montado · /debug/exec"]
+        API["kube-apiserver"]
+        SEC["Secret db-credentials<br/>(base64, sin cifrar)"]
+        DB[("Postgres blue-db<br/>tabla clientes")]
+      end
+    end
+
+    ATK -->|"1 · HTTP RCE /debug/exec"| ALB --> POD
+    POD -->|"2 · lee token montado"| POD
+    POD -->|"3 · Bearer token · RBAC godmode (* * *)"| API
+    API -->|"allowed: true"| POD
+    POD -->|"4 · GET secret + base64 -d"| SEC
+    POD -->|"5 · psql con creds robadas (red plana)"| DB
+    DB -->|"6 · pg_dump → exfiltra todo"| ATK
+
+    classDef bad fill:#fde8e8,stroke:#c0392b,color:#7b241c;
+    class POD,API,SEC,DB bad;
+```
+
+### Diagrama — el mismo ataque CONTRA la versión HARDENED
+
+```mermaid
+flowchart TD
+    ATK([Atacante<br/>su laptop])
+    subgraph AWS2["AWS · EKS endurecido"]
+      ALB2["ALB (inbound: solo tu IP)"]
+      subgraph NS2["namespace team-z-hard · PSS restricted"]
+        POD2["web-app pod<br/>uid 1000 · FS solo-lectura · SIN token · sin tools"]
+        API2["kube-apiserver"]
+        SEC2["Secret (cifrado KMS<br/>+ RBAC lo bloquea)"]
+        DB2[("Postgres blue-db<br/>aislada por NetworkPolicy")]
+      end
+    end
+
+    ATK -->|"1 · HTTP RCE (entra igual)"| ALB2 --> POD2
+    POD2 -. "2 · automount=false · NO hay token" .-x API2
+    POD2 -. "3 · RBAC mínimo · can-i → no" .-x SEC2
+    POD2 -. "4 · NetworkPolicy default-deny · TimeoutError" .-x DB2
+    POD2 -->|"5 · PSS: pod root → Forbidden<br/>IMDS → bloqueado"| POD2
+
+    classDef ok fill:#e8f8f0,stroke:#1e8449,color:#145a32;
+    classDef blocked fill:#fef9e7,stroke:#b7950b,color:#7d6608;
+    class API2,SEC2,DB2 ok;
+    class POD2 blocked;
+```
+
+> 🔴 Rojo = el atacante lo logra · 🟡 entra pero contenido · 🟢 bloqueado por diseño.
+
 ---
 ## 2. Estructura y qué hace cada YAML
 
