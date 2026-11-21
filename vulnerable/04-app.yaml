@@ -1,0 +1,95 @@
+# =============================================================================
+#  VULNERABLE - App web de demo con el PUNTO DE ENTRADA ya comprometible.
+#
+#  La app expone una ruta de "debug" (/debug/exec?cmd=...) que ejecuta comandos
+#  en el contenedor. Representa una mala configuración REAL y común: un endpoint
+#  de depuración / backdoor olvidado en producción. Es el "atacante ya tiene
+#  acceso al pod", pero mostrado de forma realista: DESDE AFUERA, por HTTP.
+#
+#  (No es malware ni un exploit de CVE: es una ruta insegura de la propia app.
+#   El foco de la charla sigue siendo la mala configuración de autorización.)
+#
+#  Misconfiguraciones de infraestructura que trae el pod:
+#   #1 usa el ServiceAccount sobre-privilegiado (app-sa)
+#   #2 automountServiceAccountToken: true  -> token montado dentro del pod
+#   #7 sin securityContext / corre como root, sin restricciones (no PSS)
+#
+#  OWASP K8s: K01 | MITRE: T1610, T1552.005, T1059 Command Execution
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: web-app-code
+  namespace: team-z
+data:
+  app.py: |
+    import subprocess
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from urllib.parse import urlparse, parse_qs
+
+    PAGE = b"team-z :: Blue Lock app (demo). Rutas: / , /debug/exec?cmd=\n"
+
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            u = urlparse(self.path)
+            if u.path == "/":
+                self.send_response(200); self.end_headers(); self.wfile.write(PAGE)
+            elif u.path == "/debug/exec":
+                # ⚠️ Endpoint de debug inseguro: ejecuta lo que le mandes.
+                cmd = parse_qs(u.query).get("cmd", [""])[0]
+                r = subprocess.run(["/bin/sh","-c",cmd], capture_output=True, text=True, timeout=30)
+                self.send_response(200); self.end_headers()
+                self.wfile.write((r.stdout + r.stderr).encode())
+            else:
+                self.send_response(404); self.end_headers()
+        def log_message(self, *a): return
+
+    HTTPServer(("0.0.0.0", 8080), H).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-app
+  namespace: team-z
+  labels: { app: web-app }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: web-app }
+  template:
+    metadata:
+      labels: { app: web-app }
+    spec:
+      serviceAccountName: app-sa            # misconf #1
+      automountServiceAccountToken: true    # misconf #2 (explícito)
+      containers:
+        - name: web
+          image: python:3.11-slim
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              apt-get update -qq && \
+              apt-get install -y -qq curl postgresql-client jq ca-certificates >/dev/null && \
+              echo "team-z web-app lista" && \
+              python /app/app.py
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - { name: code, mountPath: /app }
+          # misconf #7: SIN securityContext. Corre como root (uid 0), sin drop
+          # de capabilities, allowPrivilegeEscalation por defecto.
+      volumes:
+        - { name: code, configMap: { name: web-app-code } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-app
+  namespace: team-z
+spec:
+  selector: { app: web-app }
+  ports:
+    - port: 80
+      targetPort: 8080
+  # En producción sería un LoadBalancer accesible. En el lab lo alcanzamos con
+  # `kubectl port-forward` para NO exponerlo a Internet (ver advertencias).

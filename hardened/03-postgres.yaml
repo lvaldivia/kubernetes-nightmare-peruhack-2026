@@ -1,0 +1,88 @@
+# =============================================================================
+#  HARDENED - Misma BD PostgreSQL con los mismos datos, pero:
+#   - cumple Pod Security "restricted" (corre como no-root, sin capabilities,
+#     sin escalada de privilegios, seccomp RuntimeDefault).
+#   - queda aislada por NetworkPolicy (ver 05-networkpolicy.yaml): sólo acepta
+#     conexiones de pods etiquetados role=db-client, NO del pod de la app.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: db-seed
+  namespace: team-z-hard
+data:
+  01-seed-clientes.sql: |
+    CREATE TABLE IF NOT EXISTS clientes (
+        id SERIAL PRIMARY KEY, nombre VARCHAR(80), email VARCHAR(120),
+        plan VARCHAR(20), saldo_soles NUMERIC(10,2), tarjeta_mask VARCHAR(20),
+        creado_en TIMESTAMP NOT NULL DEFAULT NOW());
+    INSERT INTO clientes (nombre, email, plan, saldo_soles, tarjeta_mask) VALUES
+        ('Yoichi Isagi','isagi@example.com','premium',1540.50,'**** 0011'),
+        ('Meguru Bachira','bachira@example.com','premium',980.00,'**** 0022'),
+        ('Hyoma Chigiri','chigiri@example.com','free',12.30,'**** 0033'),
+        ('Rensuke Kunigami','kunigami@example.com','gold',430.75,'**** 0044'),
+        ('Gin Gagamaru','gagamaru@example.com','free',0.00,'**** 0055'),
+        ('Seishiro Nagi','nagi@example.com','premium',2210.10,'**** 0066'),
+        ('Reo Mikage','mikage@example.com','platinum',9999.99,'**** 0077'),
+        ('Rin Itoshi','rin@example.com','gold',1750.00,'**** 0088'),
+        ('Sae Itoshi','sae@example.com','platinum',8800.40,'**** 0099'),
+        ('Shoei Baro','baro@example.com','free',55.55,'**** 0101');
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blue-db
+  namespace: team-z-hard
+  labels: { app: blue-db }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: blue-db }
+  template:
+    metadata:
+      labels: { app: blue-db }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: postgres
+          image: postgres:16
+          ports: [ { containerPort: 5432 } ]
+          env:
+            - name: POSTGRES_USER
+              valueFrom: { secretKeyRef: { name: db-credentials, key: username } }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: db-credentials, key: password } }
+            - name: POSTGRES_DB
+              valueFrom: { secretKeyRef: { name: db-credentials, key: database } }
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: seed, mountPath: /docker-entrypoint-initdb.d }
+            - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: run,  mountPath: /var/run/postgresql }
+          readinessProbe:
+            exec: { command: ["pg_isready","-U","appuser","-d","bluelock"] }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+      volumes:
+        - { name: seed, configMap: { name: db-seed } }
+        - { name: data, emptyDir: {} }
+        - { name: run,  emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blue-db
+  namespace: team-z-hard
+spec:
+  selector: { app: blue-db }
+  ports: [ { port: 5432, targetPort: 5432 } ]

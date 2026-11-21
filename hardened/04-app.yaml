@@ -1,0 +1,96 @@
+# =============================================================================
+#  HARDENED - La MISMA app, con el MISMO endpoint de debug vulnerable
+#  (/debug/exec). A propósito: queremos demostrar DEFENSA EN PROFUNDIDAD.
+#
+#  Aunque el atacante entre igual (RCE a nivel de app), dentro del pod se
+#  encuentra con que:
+#   - NO hay token montado (automountServiceAccountToken: false)  -> #2
+#   - si hubiera, el RBAC del SA no permite leer secrets            -> #1, #3
+#   - no hay curl/psql: imagen mínima
+#   - securityContext "restricted": no-root, FS de sólo lectura,
+#     sin caps, sin escalada, seccomp RuntimeDefault                -> #7
+#   - la NetworkPolicy le impide llegar a la BD y al API Server      -> #6
+#
+#  OWASP K8s: K01, K03, K08 | MITRE: mitiga T1552.005, T1078
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: web-app-code
+  namespace: team-z-hard
+data:
+  app.py: |
+    import subprocess
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from urllib.parse import urlparse, parse_qs
+    PAGE = b"team-z-hard :: Blue Lock app (hardened). Rutas: / , /debug/exec?cmd=\n"
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            u = urlparse(self.path)
+            if u.path == "/":
+                self.send_response(200); self.end_headers(); self.wfile.write(PAGE)
+            elif u.path == "/debug/exec":
+                cmd = parse_qs(u.query).get("cmd", [""])[0]
+                r = subprocess.run(["/bin/sh","-c",cmd], capture_output=True, text=True, timeout=30)
+                self.send_response(200); self.end_headers()
+                self.wfile.write((r.stdout + r.stderr).encode())
+            else:
+                self.send_response(404); self.end_headers()
+        def log_message(self, *a): return
+    HTTPServer(("0.0.0.0", 8080), H).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-app
+  namespace: team-z-hard
+  labels: { app: web-app }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: web-app }
+  template:
+    metadata:
+      labels: { app: web-app }
+    spec:
+      serviceAccountName: app-sa
+      automountServiceAccountToken: false        # corrige misconf #2
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: web
+          image: python:3.11-slim
+          # Sin apt-get: imagen mínima, no trae curl/psql (menos superficie).
+          command: ["python", "/app/app.py"]
+          ports: [ { containerPort: 8080 } ]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: code, mountPath: /app, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+            - { name: sa-token, mountPath: /var/run/secrets/tokens, readOnly: true }
+      volumes:
+        - { name: code, configMap: { name: web-app-code } }
+        - { name: tmp, emptyDir: {} }
+        - name: sa-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+                  audience: sts.amazonaws.com
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-app
+  namespace: team-z-hard
+spec:
+  selector: { app: web-app }
+  ports: [ { port: 80, targetPort: 8080 } ]

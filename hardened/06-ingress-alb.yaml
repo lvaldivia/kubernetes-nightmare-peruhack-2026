@@ -1,0 +1,29 @@
+# =============================================================================
+#  HARDENED - Ingress/ALB para la app hardened (paralelo al del Video 1).
+#
+#  Mismo endpoint RCE, mismo ALB internet-facing restringido a TU IP. La gracia:
+#  aunque el atacante entre igual, no puede hacer nada (defensa en profundidad).
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web-app
+  namespace: team-z-hard
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+    alb.ingress.kubernetes.io/inbound-cidrs: TU_IP/32
+    alb.ingress.kubernetes.io/healthcheck-path: /
+spec:
+  ingressClassName: alb
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web-app
+                port:
+                  number: 80

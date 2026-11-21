@@ -1,0 +1,33 @@
+# =============================================================================
+#  VULNERABLE - Ingress que provisiona un AWS ALB para la app de demo.
+#
+#  ⚠️⚠️  La app tiene un endpoint RCE. El ALB es internet-facing PERO su
+#        security group de entrada está restringido SOLO a la IP del instructor
+#        (inbound-cidrs). NUNCA lo dejes en 0.0.0.0/0.
+#
+#  Requiere: AWS Load Balancer Controller instalado en el clúster.
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web-app
+  namespace: team-z
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+    # Solo la IP de la laptop del instructor puede alcanzar el ALB:
+    alb.ingress.kubernetes.io/inbound-cidrs: TU_IP/32
+    alb.ingress.kubernetes.io/healthcheck-path: /
+spec:
+  ingressClassName: alb
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web-app
+                port:
+                  number: 80

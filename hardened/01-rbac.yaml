@@ -1,0 +1,42 @@
+# =============================================================================
+#  HARDENED - RBAC de mínimo privilegio (corrige misconfiguraciones #1 y #3)
+#
+#  - SA dedicado con automountServiceAccountToken: false.
+#  - NADA de ClusterRole/ClusterRoleBinding con comodines.
+#  - Un Role NAMESPACED que sólo permite leer pods del propio namespace
+#    (lo que una app de salud/observabilidad podría necesitar como mucho).
+#  - EXPLÍCITAMENTE no incluye "secrets", así que leer db-credentials FALLA.
+#
+#  OWASP K8s: K03 (Overly Permissive RBAC)
+#  MITRE ATT&CK: mitiga T1078 / TA0004
+# =============================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: app-sa
+  namespace: team-z-hard
+automountServiceAccountToken: false     # corrige misconf #2 a nivel de SA
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: app-minimal
+  namespace: team-z-hard
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]              # SOLO esto. Nada de secrets, nada de "*".
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: app-minimal-binding
+  namespace: team-z-hard
+subjects:
+  - kind: ServiceAccount
+    name: app-sa
+    namespace: team-z-hard
+roleRef:
+  kind: Role
+  name: app-minimal
+  apiGroup: rbac.authorization.k8s.io

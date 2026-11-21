@@ -1,0 +1,14 @@
+# =============================================================================
+#  VULNERABLE - Namespace "team-z" (temática Blue Lock)
+#
+#  ⚠️  Sin etiquetas de Pod Security Standards => se admiten pods privilegiados
+#      e inseguros (misconfiguración #7). Comparar con hardened/00-namespace.yaml
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-z
+  labels:
+    proyecto: knightmare
+    estado: vulnerable
+    # NOTA: deliberadamente NO hay labels pod-security.kubernetes.io/*

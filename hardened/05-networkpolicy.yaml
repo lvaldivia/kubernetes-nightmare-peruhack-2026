@@ -1,0 +1,78 @@
+# =============================================================================
+#  HARDENED - NetworkPolicies (corrige misconfiguración #6)
+#
+#  Requiere que la aplicación de NetworkPolicy esté activa en el VPC CNI
+#  (ver infra: addon vpc-cni con enableNetworkPolicy="true").
+#
+#  Estrategia:
+#   A) default-deny: en team-z-hard, por defecto NADIE entra ni sale.
+#   B) permitir DNS saliente (si no, nada resuelve nombres).
+#   C) la BD sólo acepta ingress en 5432 desde pods role=db-client.
+#      El pod de la app NO tiene esa etiqueta => su conexión a la BD FALLA.
+#   D) el pod de la app no tiene egress permitido hacia la BD ni al API Server.
+#
+#  OWASP K8s: K07 (Missing Network Segmentation Controls)
+#  MITRE ATT&CK: mitiga TA0008 Lateral Movement / T1046 Network Service Discovery
+# =============================================================================
+# A) Default deny-all (ingress + egress) en el namespace
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: team-z-hard
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+# B) Permitir sólo DNS saliente (UDP/TCP 53) a kube-dns para todos los pods
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: team-z-hard
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels: { k8s-app: kube-dns }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+# B2) Permitir INGRESS a la app web en 8080 (para que el ALB/entrada funcione).
+#     El egress sigue denegado por default, así que la app puede ser ALCANZADA
+#     pero NO puede salir a la BD ni al API Server (tráfico de respuesta permitido
+#     por ser stateful). Esto es exactamente el objetivo: app accesible, aislada.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: webapp-allow-ingress
+  namespace: team-z-hard
+spec:
+  podSelector:
+    matchLabels: { app: web-app }
+  policyTypes: ["Ingress"]
+  ingress:
+    - ports:
+        - { protocol: TCP, port: 8080 }
+---
+# C) La BD (app=blue-db) sólo acepta 5432 desde pods etiquetados role=db-client.
+#    El pod web-app NO lleva esa etiqueta => bloqueado.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-allow-from-clients-only
+  namespace: team-z-hard
+spec:
+  podSelector:
+    matchLabels: { app: blue-db }
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { role: db-client }
+      ports:
+        - { protocol: TCP, port: 5432 }

@@ -1,0 +1,42 @@
+# =============================================================================
+#  VULNERABLE - ServiceAccount sobre-privilegiado + ClusterRoleBinding comodín
+#
+#  Misconfiguraciones:
+#   #1 ServiceAccount sobre-privilegiado asignado al pod de la app.
+#   #3 ClusterRoleBinding con comodines (verbs/resources/apiGroups = "*").
+#
+#  OWASP K8s: K03 (Overly Permissive RBAC)
+#  MITRE ATT&CK: T1078 Valid Accounts, TA0004 Privilege Escalation
+# =============================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: app-sa
+  namespace: team-z
+# automountServiceAccountToken NO se define aquí => por defecto es true (misconf #2)
+---
+# ClusterRole con comodines absolutos: puede hacer TODO en TODO el clúster.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: knightmare-godmode
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["*"]
+---
+# Une el SA de la app (que vive en el pod comprometido) con el godmode cluster-wide.
+# Resultado: el token del pod puede leer Secrets de cualquier namespace,
+# crear pods, escalar, etc.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: knightmare-godmode-binding
+subjects:
+  - kind: ServiceAccount
+    name: app-sa
+    namespace: team-z
+roleRef:
+  kind: ClusterRole
+  name: knightmare-godmode
+  apiGroup: rbac.authorization.k8s.io

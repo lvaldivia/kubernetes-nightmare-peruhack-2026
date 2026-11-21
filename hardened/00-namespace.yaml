@@ -1,0 +1,20 @@
+# =============================================================================
+#  HARDENED - Namespace "team-z-hard" con Pod Security Standards "restricted"
+#
+#  Las etiquetas pod-security.kubernetes.io/* hacen que el API Server RECHACE
+#  cualquier pod que no cumpla el perfil restricted (root, caps, hostPath, etc).
+#
+#  Corrige misconfiguración #7.
+#  OWASP K8s: K01 (Insecure Workload Config)
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-z-hard
+  labels:
+    proyecto: knightmare
+    estado: hardened
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

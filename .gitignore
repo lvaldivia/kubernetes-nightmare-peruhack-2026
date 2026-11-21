@@ -1,0 +1,21 @@
+# Guiones de los videos (material de grabación, no se versiona)
+GUION-VIDEO-1-ATAQUE.md
+GUION-VIDEO-2-HARDENED.md
+
+# Artefactos del ataque / dumps descargados
+clientes_dump.sql
+*.dump
+*.sql.bak
+
+# Bundles de certificados / secretos locales
+*-ca-bundle.pem
+avg-ca-bundle.pem
+iam_policy.json
+
+# kubeconfig / credenciales
+kubeconfig
+*.kubeconfig
+
+# Temporales del sistema
+.DS_Store
+Thumbs.db

@@ -1,0 +1,89 @@
+# =============================================================================
+#  PeruHack26 - "Kubernetes Nightmare: From Container to Cluster Control"
+#  Clúster EKS para el laboratorio INTENCIONALMENTE VULNERABLE (uso educativo).
+#
+#  ⚠️  SOLO para una cuenta AWS propia, aislada y con datos ficticios.
+#      NO exponer a Internet. Destruir al terminar (ver README -> Teardown).
+#
+#  Desplegar:  eksctl create cluster -f infra/cluster.yaml
+#  Destruir:   eksctl delete cluster -f infra/cluster.yaml --wait
+# =============================================================================
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: knightmare-peruhack
+  region: us-east-1
+  version: "1.33"
+  tags:
+    project: peruhack26-knightmare
+    environment: lab-ephemeral
+    owner: security-training
+
+# -----------------------------------------------------------------------------
+# VPC: eksctl crea una VPC básica dedicada (no reutiliza la default).
+# Nodos en subredes privadas; solo los ELB/NAT quedan en subredes públicas.
+# -----------------------------------------------------------------------------
+vpc:
+  cidr: "10.42.0.0/16"
+  nat:
+    gateway: Single          # 1 solo NAT GW para abaratar costos
+  clusterEndpoints:
+    # API Server del control plane:
+    #  - privateAccess: los nodos y pods hablan con el API por red privada.
+    #  - publicAccess: lo dejamos true SOLO para que puedas usar kubectl desde
+    #    tu laptop en la demo, PERO restringido por IP (ver publicAccessCIDRs).
+    #    👉 Reemplaza TU_IP/32 por la IP pública de tu laptop.
+    privateAccess: true
+    publicAccess: true
+  publicAccessCIDRs:
+    - "TU_IP/32"    # tu IP pública /32 (curl https://checkip.amazonaws.com)
+
+# -----------------------------------------------------------------------------
+# Nodegroup pequeño y barato. 2 x t3.medium on-demand.
+# (Para abaratar aún más puedes usar spot: true.)
+# -----------------------------------------------------------------------------
+managedNodeGroups:
+  - name: ng-knightmare
+    instanceType: t3.medium
+    desiredCapacity: 2
+    minSize: 1
+    maxSize: 2
+    volumeSize: 20
+    privateNetworking: true
+    labels:
+      role: workers
+    tags:
+      nodegroup: knightmare-workers
+
+# -----------------------------------------------------------------------------
+# EKS Control Plane Audit Logging -> CloudWatch.
+# Necesario para el bloque "VAR room": mostrar el rastro del ataque
+# (quién leyó el Secret, qué llamadas hizo el token robado al API Server).
+# Los logs quedan en el log group:
+#   /aws/eks/knightmare-peruhack/cluster
+# -----------------------------------------------------------------------------
+cloudWatch:
+  clusterLogging:
+    enableTypes:
+      - "audit"
+      - "authenticator"
+      - "api"
+    logRetentionInDays: 7
+
+# -----------------------------------------------------------------------------
+# OIDC + addons base. El OIDC lo usa la versión HARDENED para IRSA
+# (IAM Roles for Service Accounts) al integrar AWS Secrets Manager.
+# -----------------------------------------------------------------------------
+iam:
+  withOIDC: true
+
+addons:
+  # NOTA: NO habilitamos la NetworkPolicy nativa del VPC CNI
+  # (configurationValues enableNetworkPolicy="true"). En este clúster esa feature
+  # colgaba el daemon IPAM de aws-node en nodos nuevos ("Checking for IPAM
+  # connectivity", exit 143), dejándolos NotReady. En su lugar usamos CALICO en
+  # modo policy-only para aplicar las NetworkPolicies (ver README -> Hardened).
+  - name: vpc-cni
+  - name: coredns
+  - name: kube-proxy
